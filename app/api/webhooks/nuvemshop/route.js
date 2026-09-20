@@ -60,7 +60,7 @@ async function POST(request) {
   //    o fluxo de autorização OAuth feito uma vez, manualmente.
   const { data: store, error: storeErr } = await supabaseAdmin
     .from('stores')
-    .select('id, platform_store_id')
+    .select('id, platform_store_id, access_token')
     .eq('platform', 'nuvemshop')
     .eq('platform_store_id', String(platformStoreId))
     .maybeSingle();
@@ -70,21 +70,25 @@ async function POST(request) {
     return new Response('Erro interno', { status: 500 });
   }
 
-  if (!store) {
+  if (!store || !store.access_token) {
     // Confirmamos o recebimento (200) para a Nuvemshop não ficar
-    // re-entregando, mas registramos um alerta: falta configurar a loja.
+    // re-entregando, mas registramos um alerta: falta configurar a loja ou falta o token.
     await supabaseAdmin.from('alerts').insert({
       kind: 'loja_nao_configurada',
-      message: `Recebido webhook de store_id=${platformStoreId} sem registro em public.stores. ` +
+      message: `Recebido webhook de store_id=${platformStoreId} sem registro completo em public.stores. ` +
         `PRECISO DE: cadastrar essa loja (platform_store_id, access_token) antes de processar pedidos dela.`,
     });
-    return new Response('OK (loja não configurada — veja alerts)', { status: 200 });
+    return new Response('OK (loja não configurada/sem token — veja alerts)', { status: 200 });
   }
 
   // 2) Buscar o pedido completo — o webhook não traz os dados, só o id.
   let order;
   try {
-    order = await fetchOrder(store.platform_store_id, platformOrderId);
+    order = await fetchOrder(
+      store.platform_store_id,
+      platformOrderId,
+      store.access_token
+    );
   } catch (err) {
     console.error('Erro ao buscar pedido na Nuvemshop:', err.message);
     // Não confirmamos com 200 aqui de propósito: queremos que a
@@ -191,10 +195,13 @@ async function upsertOrder(storeUuid, order) {
         payment_status: order.payment_status || null,
         shipping_status: order.shipping_status || null,
         currency: order.currency || 'BRL',
-        subtotal_cents: order.subtotal ?? null,
-        shipping_cents: order.shipping ?? null,
-        discount_cents: order.discount ?? null,
-        total_cents: order.total,
+        
+        // CORREÇÃO: Conversão dos valores decimais para inteiros (centavos)
+        subtotal_cents: order.subtotal != null ? Math.round(Number(order.subtotal) * 100) : null,
+        shipping_cents: order.shipping != null ? Math.round(Number(order.shipping) * 100) : null,
+        discount_cents: order.discount != null ? Math.round(Number(order.discount) * 100) : null,
+        total_cents: order.total != null ? Math.round(Number(order.total) * 100) : null,
+        
         raw_payload: order, // guarda o JSON bruto para auditoria/depuração
         updated_at: new Date().toISOString(),
       },
