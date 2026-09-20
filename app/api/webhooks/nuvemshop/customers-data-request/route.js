@@ -1,1 +1,34 @@
-git add app/api/webhooks/nuvemshop/customers-data-request/route.js
+import { verifyNuvemshopSignature } from '../../../../../lib/nuvemshop.js';
+
+export async function POST(request) {
+  const rawBody = await request.text();
+  const hmacHeader = request.headers.get('x-linkedstore-hmac-sha256');
+
+  let valid;
+  try {
+    valid = verifyNuvemshopSignature(rawBody, hmacHeader);
+  } catch (err) {
+    console.error('Erro ao verificar assinatura do webhook LGPD (customers-data-request):', err.message);
+    return new Response('Configuração ausente no servidor', { status: 500 });
+  }
+
+  if (!valid) {
+    console.warn('Webhook customers-data-request rejeitado: assinatura inválida.');
+    return new Response('Assinatura inválida', { status: 401 });
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch (err) {
+    return new Response('Payload JSON inválido', { status: 400 });
+  }
+
+  const customerId = payload.customer?.id || payload.id || 'desconhecido';
+
+  // Log seguro (apenas IDs, sem dados pessoais)
+  console.log(`[LGPD] Webhook de solicitação de dados de cliente recebido. Evento: ${payload.event || 'customers/data_request'} | Store ID: ${payload.store_id} | Customer ID: ${customerId}`);
+  
+  // Nenhuma ação de compilação/exportação de dados é realizada nesta etapa.
+  return new Response('OK', { status: 200 });
+}
